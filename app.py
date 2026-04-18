@@ -1,18 +1,22 @@
 import streamlit as st
-import tensorflow as tf
 import joblib
 import numpy as np
+import tflite_runtime.interpreter as tflite
 
-# 1. Load the "Brain" and the "Cleaning Rules"
-model = tf.keras.models.load_model('nids_model.h5')
-scaler = joblib.load('scaler.pkl')
+# Load scaler
+scaler = joblib.load("scaler.pkl")
 
-# 2. Page Setup
+# Load TFLite model
+interpreter = tflite.Interpreter(model_path="nids_model.tflite")
+interpreter.allocate_tensors()
+
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+
 st.set_page_config(page_title="Nexus NIDS", page_icon="🛡️")
 st.title("🛡️ Nexus Network Intrusion Detection")
 st.markdown("---")
 
-# 3. Create the Input Form
 with st.form("input_form"):
     col1, col2 = st.columns(2)
     with col1:
@@ -26,35 +30,30 @@ with st.form("input_form"):
 
     submit = st.form_submit_button("Analyze Traffic")
 
-# 4. The Prediction Logic
 if submit:
-    # Initialize all 41 features used during training
-    input_data = np.zeros((1, 41))
-    
-    # Map UI inputs to feature columns
-    input_data[0, 0] = duration     # duration
-    input_data[0, 4] = src_bytes    # src_bytes
-    input_data[0, 5] = dst_bytes    # dst_bytes
-    input_data[0, 11] = logged_in   # logged_in
-    input_data[0, 22] = count       # count
+    input_data = np.zeros((1, 41), dtype=np.float32)
 
-    # Demo simulation
+    input_data[0, 0] = duration
+    input_data[0, 4] = src_bytes
+    input_data[0, 5] = dst_bytes
+    input_data[0, 11] = logged_in
+    input_data[0, 22] = count
+
     if count > 100 and logged_in == 0:
-        input_data[0, 24] = 0.9   # serror_rate
-        input_data[0, 28] = 0.1   # same_srv_rate
-        input_data[0, 32] = 255   # dst_host_count
+        input_data[0, 24] = 0.9
+        input_data[0, 28] = 0.1
+        input_data[0, 32] = 255
 
-    # Optional protocol mapping
-    # tcp=1, udp=2, icmp=3 (adjust if your training used different encoding)
     protocol_map = {"tcp": 1, "udp": 2, "icmp": 3}
     input_data[0, 1] = protocol_map[protocol]
 
-    # Scale + predict
-    scaled_input = scaler.transform(input_data)
-    prediction = model.predict(scaled_input)
+    scaled_input = scaler.transform(input_data).astype(np.float32)
+
+    interpreter.set_tensor(input_details[0]["index"], scaled_input)
+    interpreter.invoke()
+    prediction = interpreter.get_tensor(output_details[0]["index"])
     prob = float(prediction[0][0])
 
-    # Show results
     if prob > 0.5:
         st.error(f"🚨 INTRUSION DETECTED! (Confidence: {prob*100:.2f}%)")
         st.warning("Action Recommended: Block IP address and inspect packet headers.")
